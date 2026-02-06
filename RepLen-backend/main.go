@@ -15,7 +15,7 @@ func main() {
 	http.HandleFunc("/health",healthHandler)
     http.HandleFunc("/intent", createIntentHandler)    // POST /intent
     http.HandleFunc("/intents", listIntentsHandler)  // GET /intents
-
+    intentStore.StartExecutor() // Start the background executor to process intents
 	log.Println("Server is running on port 3000") 
 	log.Fatal(http.ListenAndServe(":3000", nil))
 }
@@ -51,8 +51,9 @@ func createIntentHandler(w http.ResponseWriter, r *http.Request) {    // post /i
 		PoolID:    req.PoolID,
 		Action:    intent.ActionType(req.Action),
 		Amount:    req.Amount,
+		Status:    intent.StatusPending,
 		CreatedAt: now,
-		ExecutedAt: now.Add(time.Duration(req.DelaySec) * time.Second),
+		ExecuteAt: now.Add(time.Duration(req.DelaySec) * time.Second),  // set execute time based on delay
 	}
 
 	intentStore.Add(i)
