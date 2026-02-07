@@ -17,7 +17,7 @@ contract LPPrivacy is IHooks{
             Add, Remove
         };
 
-    bytes hookData;
+    bytes hookData = 0;
 
     struct LiquidityIntent {
         address lp;
@@ -32,6 +32,7 @@ contract LPPrivacy is IHooks{
     }
 
     mapping(uint256 => LiquidityIntent ) public intent;
+    mapping (uint256 => uint256) intentFee;
 
     uint256 intentid = 0;
 
@@ -40,8 +41,12 @@ contract LPPrivacy is IHooks{
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         bytes calldata hookData
-    ) external returns (bytes4) {
+    ) external payable  returns (bytes4) {
+
         require( msg.sender == address(poolManager),"You can't proceed");
+
+        intentFee[intentid] = msg.value;
+
         LiquidityIntent memory _liquidityIntent ;
         PoolKey poolkey = key;
         _liquidityIntent.lp = sender;
@@ -83,7 +88,7 @@ contract LPPrivacy is IHooks{
 
     }
 
-    function executeIntent(uint256 intentId) public {
+    function executeIntent(uint256 intentId, uint minFee) public {
         if (intentId >= intentid) {
             revert();
         }
@@ -101,15 +106,27 @@ contract LPPrivacy is IHooks{
         tParams.tickLower = tLower;
         tParams.tickUpper = tUpper;
         tParams.liquidityDelta = lDelta;
-        if (poolManager.modifyLiquidity(intent[intentId].poolKey, tParams, hookData)) {
-
-        } else {
-            revert();
+        if (intent[intentId].action == Add) {
+            if (lDelta <= 0) {
+                revert();
+            }
         }
+
+        require(msg.value >= minFee);
+        
+
+        if (intent[intentId].action == Remove) {
+            if (lDelta >= 0) {
+                revert();
+            }
+        }
+        hookData = bytes(intent[intentId].lp);
+
+        poolManager.modifyLiquidity(intent[intentId].poolKey, tParams, hookData);
+
+        emit executedIntent(intentId);
         if (current_block >= intent[intentId].executeAfterBlock) {
             intent[intentId].isExecuted = true;
         }
-
-        emit executedIntent(intentId);
     }
 }
