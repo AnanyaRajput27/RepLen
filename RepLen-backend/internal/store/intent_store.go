@@ -67,3 +67,19 @@ func (s *IntentStore) ExecutorStatus() map[string]interface{} {
 	}
 }
 
+func (s *IntentStore) GetReadyIntents() []intent.LenIntent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	ready := []intent.LenIntent{}
+
+	for _, i := range s.intents {
+		if i.Status == "PENDING" &&
+			(i.ExecutedAt.Before(now) || i.ExecutedAt.Equal(now)) {
+			ready = append(ready, i)
+		}
+	}
+
+	return ready
+}
