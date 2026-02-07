@@ -16,6 +16,7 @@ func main() {
     http.HandleFunc("/intent", createIntentHandler)    // POST /intent
     http.HandleFunc("/intents", listIntentsHandler)  // GET /intents
 	http.HandleFunc("/executor/status", executorStatusHandler)
+    http.HandleFunc("/intents/ready", readyIntentsHandler)
 
     intentStore.StartExecutor() // Start the background executor to process intents
 	log.Println("Server is running on port 3000") 
@@ -83,3 +84,12 @@ func executorStatusHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
+func readyIntentsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ready := intentStore.GetReadyIntents()
+	json.NewEncoder(w).Encode(ready)
+}
