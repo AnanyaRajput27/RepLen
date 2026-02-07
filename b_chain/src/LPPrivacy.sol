@@ -4,6 +4,7 @@ pragma solidity^0.8.10;
 
 import "@V4-Core/src/interfaces/IHooks.sol";
 import "@V4-Core/src/interfaces/IPoolManager.sol";
+import {IERC20Minimal} from "@V4-Core/src/interfaces/external/IERC20Minimal.sol";
 
 contract LPPrivacy is IHooks{
     IPoolManager public poolManager;
@@ -31,6 +32,8 @@ contract LPPrivacy is IHooks{
 
     mapping(uint256 => LiquidityIntent ) public intent;
     mapping (uint256 => uint256) intentFee;
+
+     bytes calldata hookData;
 
     uint256 intentid = 0;
 
@@ -105,8 +108,6 @@ contract LPPrivacy is IHooks{
             revert();
         }
 
-        bytes hookData;
-
         ModifyLiquidityParams tParams;
         int24 tLower = intent[intentId].tickLower;
         int24 tUpper = intent[intentId].tickUpper;
@@ -131,7 +132,6 @@ contract LPPrivacy is IHooks{
 
         poolManager.modifyLiquidity(intent[intentId].poolKey, tParams, hookData);
 
-        emit executedIntent(intentId);
         
     }
 
@@ -149,22 +149,36 @@ contract LPPrivacy is IHooks{
         (address executerAddress, address LPAddress, uint256 intentId) = abi.decode(hookData,(address, address, uint256));
         LiquidityIntent storage intentt = intent[intentId];
         require(intentt.isExecuted == false);
-        address token0 = delta;
-        address token1 = feesAccrued;
 
-        if (token1 < 0) {
-            token1 = 
+        address token0 = key.currency0;
+        address token1 = key.currency1;
+
+
+        int256 a0 = delta.amount0();
+        int256 a1 = delta.amount1();
+
+        if (a0 < 0) {
+            poolManager.settle(token0, lp, -a0); 
         }
 
-        if (token0 > 0) {
+        if (a1 > 0) {
+           poolManager.take(token0, lp, a1);
 
         }
 
+        if (a0 < 0) {
+            poolManager.settle(token1, lp, -a0);
+        }
+
+        if (a1 > 0) {
+            poolManager.take(token1, lp, a1);
+        }
         
 
         intentt[intentId].isExecuted = true;
         intentFee[intentId] = 0;
-        return this.afterAddLiquidity.selector;
+        emit executedIntent(intentId);
+        return (this.afterAddLiquidity.selector, delta);
     }
 
      function afterRemoveLiquidity(
@@ -181,22 +195,33 @@ contract LPPrivacy is IHooks{
         LiquidityIntent storage intentt = intent[intentId];
 
         require(intentt.isExecuted == false);
-        address token0 = delta;
-        address token1 = feesAccrued;
 
-        if (token1 < 0) {
-            token1 = 
+        address token0 = key.currency0;
+        address token1 = key.currency1;
+
+        int256 a0 = delta.amount0();
+        int256 a1 = delta.amount1();
+
+        if (a0 < 0) {
+            poolManager.settle(token0, lp, a0);
         }
 
-        if (token0 > 0) {
-
+        if (a1 > 0) {
+            poolManager.take(token0, lp, a1);
+        }
+        
+        if (a0 < 0) {
+            poolManager.settle(token1, lp, a0);
         }
 
+        if (a1 > 0) {
+            poolManager.take(token1, lp, a1);
+        }
         
         intentt[intentId].isExecuted = true;
         intentFee[intentId] = 0;
-
-        return this.afterRemoveLiquidity.selector;
+        emit executedIntent(intentId);
+        return (this.afterRemoveLiquidity.selector,delta);
 
     }
 
