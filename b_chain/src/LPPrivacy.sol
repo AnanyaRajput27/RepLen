@@ -4,6 +4,7 @@ pragma solidity^0.8.10;
 
 import "@V4-Core/src/interfaces/IHooks.sol";
 import "@V4-Core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "@V4-Core/src/libraries/Hooks.sol";
 import {IERC20Minimal} from "@V4-Core/src/interfaces/external/IERC20Minimal.sol";
 
 contract LPPrivacy is IHooks{
@@ -12,7 +13,16 @@ contract LPPrivacy is IHooks{
     uint256 public delay_block;
     uint256 public gracePeriod;
 
-    constructor(manager, delay, grace);
+    constructor(IPoolManager manager, uint256 delay, uint256  grace) {
+        require(address(manager) != address(0), "Bad manager");
+        require(delay > 0, "Bad delay");
+
+        poolManager = manager;
+        delay_block = delay;
+        gracePeriod = grace;
+    }
+
+    bool private locked;
 
     event queuedIntent(uint256);
     event executedIntent(uint256);
@@ -41,12 +51,24 @@ contract LPPrivacy is IHooks{
 
     uint256 intentid = 0;
 
+    modifier  nonReentrant() {
+        require(!locked, "Reentrancy blocked");
+        locked = true;
+        _;
+        locked = false;
+    }
+
+    modifier validIntent(uint256 intentId) {
+        require(intentId < intentid, "Invalid intent");
+        _;
+    }
+
      function beforeAddLiquidity(
         address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         bytes calldata hookData
-    ) external returns (bytes4) {
+    ) external override returns (bytes4) {
 
         require( msg.sender == address(poolManager),"You can't proceed");
 
@@ -73,7 +95,7 @@ contract LPPrivacy is IHooks{
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         bytes calldata hookData
-    ) external returns (bytes4) {
+    ) external override  returns (bytes4) {
          LiquidityIntent memory _liquidityIntent ;
        
         _liquidityIntent.lp = sender;
@@ -93,24 +115,18 @@ contract LPPrivacy is IHooks{
 
     }
 
-    function queueIntentFee(uint256 fees, uint256 intentId) public payable  {
-        require(intentId < intentid);
+    function queueIntentFee(uint256 fees, uint256 intentId) public payable validIntent(intentId) {
         require(msg.sender == intent[intentId].lp);
         require(msg.value >= fees);
         intentFee[intentId] = fees;
 
     }
 
-    function executeIntent(uint256 intentId) public {
+    function executeIntent(uint256 intentId) public validIntent(intentId) {
         require(!intent[intentId].isCancelled);
-        require(intentFee[intentId] > 0);
+        require(intentFee[intentId] > 0, "No fee");
+        require(msg.msg.sender != intent[intentId].lp);
 
-        if (intentId >= intentid) {
-            revert();
-        }
-        if (intentFee[intentId] <= 0) {
-            revert();
-        }
         if (intent[intentId].isExecuted == true) {
             revert();
         }
@@ -155,11 +171,13 @@ contract LPPrivacy is IHooks{
         BalanceDelta delta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (bytes4, BalanceDelta) {
+    ) external override returns (bytes4, BalanceDelta) {
 
          require(msg.sender == poolManager);
         (address executerAddress, address LPAddress, uint256 intentId) = abi.decode(hookData,(address, address, uint256));
         LiquidityIntent storage intentt = intent[intentId];
+
+        require(executerAddress == msg.sender);
 
         require(!intentt.isExecuted);
         require(intentId < intentid);
@@ -203,13 +221,14 @@ contract LPPrivacy is IHooks{
         BalanceDelta delta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (bytes4, BalanceDelta) {
+    ) external override returns (bytes4, BalanceDelta) {
 
          require(msg.sender == poolManager);
         (address executerAddress, address LPAddress, uint256 intentId) = abi.decode(hookData,(address, address, uint256));
         LiquidityIntent storage intentt = intent[intentId];
 
         require(intentId < intentid);
+        require(executerAddress == msg.sender);
 
         require(!intentt.isExecuted);
         uint256 fees = intentFee[intentId];
@@ -244,7 +263,7 @@ contract LPPrivacy is IHooks{
 
     }
 
-    function withdraw(uint256 amount) external payable {
+    function withdraw(uint256 amount) external nonReentrant {
         amount = rewards[msg.sender];
         require(amount > 0);
         rewards[msg.sender] = 0;
@@ -253,37 +272,64 @@ contract LPPrivacy is IHooks{
 
     }
 
-    function refundAfterExpiry(uint256 id) external payable returns(uint256) {
-        require(id < intentid);
-        LiquidityIntent storage i = intent[id];
-        require(block.number > intent[id].expiryBlock);
-        require(!i.isExecuted);
-        require(!i.isCancelled);
-        uint256 fee = intentFee[id];
+    function refundAfterExpiry(uint256 intentId) external nonReentrant validIntent(intentId) {
+
+        LiquidityIntent storage i = intent[intentId];
+
+        require(block.number > i.expiryBlock,"Not expired yet");
+        require(!i.isExecuted,"Already executed");
+        require(!i.isCancelled,"Already cancelled");
+
+        uint256 fee = intentFee[intentId];
         require(fee > 0);
-        intentFee[id] = 0;
-        intent[id].isCancelled = true;
+        
+        intentFee[intentId] = 0;
+        i.isCancelled = true;
         (bool ok, ) = i.lp.call{value: fee}("");
         require(ok, "Refund failed");
 
     }
 
-    function cancelIntent(uint256 id) {
-        require(id < intentid);
-        LiquidityIntent storage i =  intent[id];
+    function cancelIntent(uint256 intentId) external nonReentrant validIntent(intentId) {
+
+        LiquidityIntent storage i =  intent[intentId];
         require(msg.sender == i.lp);
         require(!i.isExecuted);
         require(!i.isCancelled);
 
-        uint256 fee = intentFee[id];
+        uint256 fee = intentFee[intentId];
         i.isCancelled = true;
-        intentFee[id] = 0;
+        intentFee[intentId] = 0;
 
         if ( fee > 0) {
             (bool ok, ) = i.lp.call{value: fee}("");
-            require(ok, "Regund failed");
+            require(ok, "Refund failed");
         }
     }
+
+    function getHookPermissions()
+    external
+    pure
+    override
+    returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: false,
+            afterInitialize: false,
+
+            beforeAddLiquidity: true,
+            afterAddLiquidity: true,
+
+            beforeRemoveLiquidity: true,
+            afterRemoveLiquidity: true,
+
+            beforeSwap: false,
+            afterSwap: false,
+
+            beforeDonate: false,
+            afterDonate: false
+        });
+    }
+
     receive() external payable {}
 
 }
