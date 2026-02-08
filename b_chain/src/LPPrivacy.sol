@@ -33,8 +33,6 @@ contract LPPrivacy is IHooks{
     mapping(uint256 => LiquidityIntent ) public intent;
     mapping (uint256 => uint256) intentFee;
 
-     bytes calldata hookData;
-
     uint256 intentid = 0;
 
      function beforeAddLiquidity(
@@ -88,6 +86,7 @@ contract LPPrivacy is IHooks{
     }
 
     function queueIntentForFee(uint256 fees, uint256 intentId) public payable  {
+        require(msg.sender == intent.lp);
         require(msg.value >= fees);
         intentFee[intentId] = fees;
 
@@ -128,6 +127,9 @@ contract LPPrivacy is IHooks{
                 revert();
             }
         }
+
+        bytes  hookData;
+
         hookData = abi.encode(msg.sender, intent[intentId].lp, intentId);
 
         poolManager.modifyLiquidity(intent[intentId].poolKey, tParams, hookData);
@@ -148,7 +150,11 @@ contract LPPrivacy is IHooks{
          require(msg.sender == poolManager);
         (address executerAddress, address LPAddress, uint256 intentId) = abi.decode(hookData,(address, address, uint256));
         LiquidityIntent storage intentt = intent[intentId];
-        require(intentt.isExecuted == false);
+
+        require(!intentt.isExecuted);
+
+        uint256 fees = intentFee[intentId];
+          intentFee[intentId] = 0;
 
         address token0 = key.currency0;
         address token1 = key.currency1;
@@ -158,25 +164,27 @@ contract LPPrivacy is IHooks{
         int256 a1 = delta.amount1();
 
         if (a0 < 0) {
-            poolManager.settle(token0, lp, -a0); 
+            poolManager.settle(token0, LPAddress, -a0); 
         }
 
-        if (a1 > 0) {
-           poolManager.take(token0, lp, a1);
+        if (a0 > 0) {
+           poolManager.take(token0, LPAddress, a0);
 
         }
 
-        if (a0 < 0) {
-            poolManager.settle(token1, lp, -a0);
+        if (a1 < 0) {
+            poolManager.settle(token1, LPAddress, -a1);
         }
 
         if (a1 > 0) {
             poolManager.take(token1, lp, a1);
         }
         
+        (bool result, ) = executerAddress.call{value: fees}("");
+        require(success, "payment failed");
 
         intentt[intentId].isExecuted = true;
-        intentFee[intentId] = 0;
+      
         emit executedIntent(intentId);
         return (this.afterAddLiquidity.selector, delta);
     }
@@ -194,7 +202,10 @@ contract LPPrivacy is IHooks{
         (address executerAddress, address LPAddress, uint256 intentId) = abi.decode(hookData,(address, address, uint256));
         LiquidityIntent storage intentt = intent[intentId];
 
-        require(intentt.isExecuted == false);
+        require(!intentt.isExecuted);
+
+        uint256 fees = intentFee[intentId];
+        intentFee[intentId] = 0;
 
         address token0 = key.currency0;
         address token1 = key.currency1;
@@ -203,28 +214,30 @@ contract LPPrivacy is IHooks{
         int256 a1 = delta.amount1();
 
         if (a0 < 0) {
-            poolManager.settle(token0, lp, a0);
+            poolManager.settle(token0, lp, -a0);
         }
 
-        if (a1 > 0) {
-            poolManager.take(token0, lp, a1);
+        if (a0 > 0) {
+            poolManager.take(token0, lp, a0);
         }
         
-        if (a0 < 0) {
-            poolManager.settle(token1, lp, a0);
+        if (a1 < 0) {
+            poolManager.settle(token1, lp, -a1);
         }
 
         if (a1 > 0) {
             poolManager.take(token1, lp, a1);
         }
+
+        
+        (bool result, ) = executerAddress.call{value: fees}("");
+        require(success, "payment failed");
         
         intentt[intentId].isExecuted = true;
-        intentFee[intentId] = 0;
+      
         emit executedIntent(intentId);
         return (this.afterRemoveLiquidity.selector,delta);
 
     }
-
-
 
 }
